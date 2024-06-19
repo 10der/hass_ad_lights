@@ -2,11 +2,12 @@ from lights import Lights
 
 #
 # App contol lights
-# v.14
+# v.15
 
 class MotionLights(Lights):
     def initialize(self):
         super().initialize()
+        self.depends_on_module("lights")
 
         # Subscribe to motion sensors
         if "sensors" in self.args:

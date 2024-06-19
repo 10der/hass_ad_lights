@@ -1,4 +1,4 @@
-from motion_lights import MotionLight
+from motion_lights import MotionLights
 import datetime
 from lights import DEFAULT_DELAY
 
@@ -6,10 +6,11 @@ from lights import DEFAULT_DELAY
 # App contol lights
 # v.14
 
-class TimeoutLights(MotionLight):
+class TimeoutLights(MotionLights):
 
     def initialize(self):
         super().initialize()
+        #self.depends_on_module("motion_lights")
 
     def watch_dog_check(self, profile):
         if "time_control" in self.args:
@@ -44,7 +45,7 @@ class TimeoutLights(MotionLight):
 
         return False
 
-    def motion(self, entity, attribute, old, new, kwargs):
+    def motion_callback(self, entity, attribute, old, new, kwargs):
         if "manual" in self.args:
             if self.args["manual"]:
                 return

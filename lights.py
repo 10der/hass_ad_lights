@@ -4,7 +4,7 @@ from datetime import timedelta
 
 #
 # App contol lights
-# v.14
+# v.15
 
 DEFAULT_DELAY = 60
 DEFAULT_TIMEOUT = 60
