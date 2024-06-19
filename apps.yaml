@@ -1,0 +1,43 @@
+---
+lights:
+  module: lights
+  class: Lights
+  global: true
+
+Kitchen Motion Lights:
+  dependencies: lights
+  class: MotionLights
+  module: motion_lights
+  sensors: 
+     - binary_sensor.entrance_motion_occupancy
+  entity_on: light.kitchen_rgb_led
+  ambient_light_sensor: sensor.kitchen_illuminance_illuminance_lux
+  ambient_lux: 1
+  profiles:
+    evening:
+      start_time: sunset - 0:20:00
+      end_time: '23:00:00'
+      light_data:
+        brightness: 254
+        rgb_color: [255,255,255]
+      conditions:
+        - "self.get_state('binary_sensor.power_outage') == 'off'"
+
+    night:
+      start_time: '23:00:00'
+      end_time: sunrise
+      light_data:
+        brightness: 1
+        rgb_color: [253,245,230]
+      conditions:
+        - "self.get_state('binary_sensor.power_outage') == 'off'"
+
+#Test Lights:
+#  class: TimeoutLights
+#  module: timeout_lights
+#  entity_on: light.bedroom_nightlight
+#  delay: 60
+
+hello_world:
+  module: hello
+  class: HelloWorld
