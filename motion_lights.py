@@ -4,6 +4,7 @@ from lights import Lights
 # App contol lights
 # v.15
 
+
 class MotionLights(Lights):
     def initialize(self):
         super().initialize()
@@ -84,17 +85,13 @@ class MotionLights(Lights):
         if profile is None:
             profile = {}
 
-        # is dark?
-        if action:
-            # check motion
+        if not action:
+            self.light_off()
+        else:
             results = []
             for entity_id in self.args["sensors"]:
                 result = self.is_sensor_active(entity_id, profile)
                 results.append(result)
             # is motion is active?
             if any(results):
-                # is NOT lighting?
-                if not self.is_light():
-                    # turn ON
-                    self.on_action()
-
+                self.light_on()

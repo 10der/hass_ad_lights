@@ -1,4 +1,5 @@
 ---
+
 lights:
   module: lights
   class: Lights
@@ -8,35 +9,132 @@ Kitchen Motion Lights:
   class: MotionLights
   module: motion_lights
   sensors: 
-     - binary_sensor.entrance_motion_occupancy
+     - binary_sensor.kitchen_motion_presence_l3
   entity_on: light.kitchen_rgb_led
   ambient_light_sensor: sensor.kitchen_illuminance_illuminance_lux
-  ambient_lux: 1
+  ambient_lux: 5
   profiles:
     evening:
-      start_time: sunset - 0:20:00
+      ambient_lux: 6
+      start_time: sunset
       end_time: '23:00:00'
       light_data:
         brightness: 254
-        rgb_color: [255,255,255]
+      delay: 900
+      transition:
+        delay: 30
+        dim: 5
+      turn_off_mode: false
       conditions:
         - "self.get_state('binary_sensor.power_outage') == 'off'"
 
     night:
+      ambient_lux: 7
       start_time: '23:00:00'
       end_time: sunrise
       light_data:
-        brightness: 1
-        rgb_color: [253,245,230]
+        brightness: 10
       conditions:
         - "self.get_state('binary_sensor.power_outage') == 'off'"
 
-Test Lights:
-  class: TimeoutLights
-  module: timeout_lights
-  entity_on: light.bedroom_nightlight
-  delay: 60
+#Hallway Motion Lights:
+#  class: MotionLights
+#  module: motion_lights
+#  sensors: 
+#     - binary_sensor.entrance_motion_occupancy
+#  entity_on: light.hallway_led
+#  profiles:
+#    evening:
+#      start_time: sunset
+#      end_time: sunrise
+#      light_data:
+#        brightness: 10
+#      delay: 900
+#      transition:
+#        delay: 30
+#        dim: 5
 
-hello_world:
-  module: hello
-  class: HelloWorld
+Bath Motion Lights:
+  class: MotionLights
+  module: motion_lights
+  #sensor: binary_sensor.entrance_motion_occupancy
+  sensors: 
+     #- binary_sensor.entrance_motion_occupancy
+     - binary_sensor.bathroom_motion_occupancy
+  entity_on: light.bathroom_night_lamp
+  #door: xxxxxx
+  #light_override: xxxxxxx
+  #light_override_force_off: true
+  #ambient_light_sensor: 
+  #ambient_lux:
+  profiles:
+    day:
+      start_time: sunrise
+      end_time: sunset - 0:20:00
+      delay: 900
+      turn_off_mode: true
+      #conditions:
+      #  - "True"
+      #brightness: 255
+      # https://www.home-assistant.io/integrations/light/
+      light_data:
+        brightness: 254
+        color_temp_kelvin: 6500
+    evening:
+      start_time: sunset - 0:20:00
+      end_time: '23:00:00'
+      delay: 300
+      light_data:
+        brightness: 254
+        color_temp_kelvin: 2000
+      transition:
+        delay: 30
+        dim: 5
+      turn_off_mode: false
+    night:
+      start_time: '23:00:00'
+      end_time: sunrise
+      delay: 60
+      #brightness: 10
+      light_data:
+        brightness: 10
+        color_temp_kelvin: 2000
+      transition:
+        delay: 30
+        dim: 5
+      turn_off_mode: false
+
+#Test Lights:
+#  class: TimeoutLights
+#  module: timeout_lights
+#  entity_on: light.bedroom_nightlight
+#  delay: 60
+
+# sensor.livingroom_motion_illuminance
+
+#Hall Night Lights:
+#  class: TimeoutLights
+#  module: timeout_lights
+#  sensor: binary_sensor.livingroom_motion_presence
+#  entity_on: input_boolean.hall_led_strip
+#  manual: true
+#  time_control: true
+#  profiles:
+#    evening:
+#      start_time: sunset - 0:20:00
+#      end_time: sunrise
+#      delay: 900
+
+#Bedroom Motion Lights:
+#  class: TimeoutLights
+#  module: timeout_lights
+#  sensor: binary_sensor.bedroom_pir_presence
+#  entity_on: switch.esphome_web_1c0e7b_heart_switch
+#  manual: true
+#  time_control: true
+#  profiles:
+#    evening:
+#      start_time: sunset - 0:20:00
+#      end_time: '23:00:00'
+#      delay: 300
+

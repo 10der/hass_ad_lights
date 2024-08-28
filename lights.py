@@ -95,8 +95,8 @@ class Lights(hass.Hass):
         profile = self.get_current_profile()
 
         # if no active profile - trying to find in last action
-        if profile is None:
-            profile = self.profile
+        #if profile is None:
+        #    profile = self.profile
 
         # if no prifiles at all the initialize
         if profile is None:
@@ -143,14 +143,17 @@ class Lights(hass.Hass):
         if profile is None:
             profile = {}
 
-        ambient_lux = self.get_option(profile, "ambient_lux")
+        ambient_lux = None
+        if "ambient_lux" in self.args:
+            ambient_lux = self.args["ambient_lux"]
+        ambient_lux_profile = self.get_option(profile, "ambient_lux")
+        ambient_lux = ambient_lux_profile or ambient_lux
+
         if ambient_lux is not None:
-            if not float(new) <= ambient_lux:
-                self.log("Lux allow off")
-                self.on_lux_allow(False)
+            if float(lux_state) <= ambient_lux:
+               self.on_lux_allow(True)
             else:
-                self.log("Lux allow on")
-                self.on_lux_allow(True)
+               self.on_lux_allow(False)
 
     def on_lux_allow(self, action):
         pass
@@ -177,11 +180,19 @@ class Lights(hass.Hass):
 
         if self.lux_entity:
             lux_state = self.get_state(self.lux_entity)
-            ambient_lux = self.get_option(profile, "ambient_lux")
+
+            ambient_lux = None
+            if "ambient_lux" in self.args:
+                ambient_lux = self.args["ambient_lux"]
+            ambient_lux_profile = self.get_option(profile, "ambient_lux")
+            ambient_lux = ambient_lux_profile or ambient_lux
+
             if ambient_lux is not None:
-                if not float(lux_state) <= ambient_lux:
-                    self.log("Lux constrain on")
-                    return
+                if float(lux_state) <= ambient_lux:
+                   self.log(f'Lux: {lux_state}')
+                else:
+                   self.log("Lux constrain on")
+                   return
 
         if self.light_override:
             light_override_state = self.get_state(self.light_override)
@@ -249,7 +260,7 @@ class Lights(hass.Hass):
             profile = kwargs['profile']
         else:
             profile = {}
-        self.log("In turn_on: {} {} ".format(entity_id, profile))
+        #self.log("In turn_on: {} {} ".format(entity_id, profile))
 
         if "switch" in entity_id:
             self.turn_on(entity_id)
@@ -267,7 +278,7 @@ class Lights(hass.Hass):
             profile = kwargs['profile']
         else:
             profile = {}
-        self.log("In turn_off: {} {} ".format(entity_id, profile))
+        #self.log("In turn_off: {} {} ".format(entity_id, profile))
 
         # TODO: check is light?
 
@@ -285,7 +296,7 @@ class Lights(hass.Hass):
             profile = kwargs['profile']
         else:
             profile = {}
-        self.log("In transition: {} {} ".format(entity_id, profile))
+        #self.log("In transition: {} {} ".format(entity_id, profile))
 
         if 'transition' in profile:
             transition = profile['transition']

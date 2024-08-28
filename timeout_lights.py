@@ -50,7 +50,7 @@ class TimeoutLights(MotionLights):
             if self.args["manual"]:
                 return
 
-        super(TimeoutLights, self).motion(entity, attribute, old, new, kwargs)
+        super(TimeoutLights, self).motion_callback(entity, attribute, old, new, kwargs)
 
     def door_callback(self, entity, attribute, old, new, kwargs):
         if "manual" in self.args:
