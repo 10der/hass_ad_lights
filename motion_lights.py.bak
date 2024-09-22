@@ -1,0 +1,267 @@
+from typing import Any
+import datetime
+from datetime import timedelta
+
+# pylint: disable=import-error
+import hassapi as hass
+
+
+class MotionLights(hass.Hass):
+    def initialize(self):
+        self.sensors = self.args.get('sensors', [])
+        self.lights = self.args.get('lights', None)
+        self.ambient_sensors = self.args.get('ambient_sensors', [])
+        self.light_overrides = self.args.get('light_override', [])
+        self.light_override_force_off = self.args.get(
+            'light_override_force_off', False)
+        self.conditions = self.args.get('conditions', ['True'])
+        self.default_ambient_lux = int(self.args.get('ambient_lux', 5))
+        self.time_control = self.args.get('time_control', False)
+        #
+        self.profile = None
+        self.delay = 60
+        self.on_time = '00:00:00'
+        self.off_time = '00:00:00'
+        self.turn_off_mode = True  # turn off
+        self.transition_delay = 0
+        self.ambient_lux = self.default_ambient_lux
+        self.transition_dim = None
+        self.service_data = {}
+        #
+        self.handle = None
+
+        if isinstance(self.sensors, str):
+            self.sensors = self.sensors.split(',')
+
+        # Check some Params
+        # Subscribe to sensors/lights and off time
+        if self.sensors is not None and self.lights is not None:
+            for sensor in self.sensors:
+                self.listen_state(self.motion, sensor)
+            for light in self.lights:
+                self.listen_state(self.light_off_cancel_timer, light)
+        else:
+            self.log("No sensor specified, doing nothing")
+            return
+
+        for sensor in self.light_overrides:
+            if len(sensor.split(',')) > 1:
+                sensor = sensor.split(',')[0].strip()
+            self.listen_state(self.light_override, sensor)
+
+        inOneMinute = datetime.datetime.now() + timedelta(minutes=1)
+        self.run_every(self.watch_dog, inOneMinute, 1 * 60)
+        self.init_scheduler()
+
+        self.log("Smart lights started...")
+
+    def init_scheduler(self):
+        if "profiles" in self.args:
+            for profile_name in self.args["profiles"]:
+                profile = self.args["profiles"][profile_name]
+                start_time = str(profile.get('start_time', '00:00:00'))
+                end_time = str(profile.get('end_time', '00:00:00'))
+
+                self.run_daily(self.start_profile, start_time,
+                               **dict(profile=profile_name))
+                self.run_daily(self.end_profile, end_time,
+                               **dict(profile=profile_name))
+
+                if self.now_is_between(start_time, end_time):
+                    self.start_profile(dict(profile=profile_name))
+
+    def check_illuminance(self):
+        for sensor in self.ambient_sensors:
+            illuminance = self.get_state(sensor)
+            if (float(illuminance) > self.ambient_lux):
+                return False
+
+        return True
+
+    def motion(self, entity, attribute, old, new, kwargs):
+
+        if new not in ['on', 'off']:
+            return
+
+        check = self.constraint_check(self.conditions)
+        if not check:
+            self.log(f'Constraints is active. Motion: {new}')
+            return
+
+        overrides = self.check_light_overrides()
+        if overrides:
+            self.log(f'Lights overridden. Motion: {new}')
+            return
+
+        if not self.check_illuminance():
+            self.log(f'To much lux. Motion: {new}')
+            return
+
+        if not self.check_time(self.on_time, self.off_time):
+            self.log(f'Time not meet. Motion: {new}', )
+            return
+
+        if new == 'on':
+            self.cancel()
+            self.do_light_on(self.service_data)
+        elif new == 'off':
+            self.cancel()
+            sensor_on = False
+            for sensor in self.sensors:
+                if self.get_state(sensor) == 'on':
+                    sensor_on = True
+            if not sensor_on:
+                self.handle = self.run_in(
+                    self.do_light_off, self.delay)
+
+    def light_off_cancel_timer(self, entity, attribute, old, new, kwargs):
+        if new == 'off':
+            light_on = False
+            for light in self.lights:
+                if self.get_state(light) == 'on':
+                    light_on = True
+            if not light_on:
+                self.cancel()
+
+    def do_light_on(self, data):
+        overrides = self.check_light_overrides()
+        if overrides:
+            return
+
+        check = self.constraint_check(self.conditions)
+        if check:
+            self.light_on(data)
+
+    def do_light_off(self, kwargs):
+        overrides = self.check_light_overrides()
+        if overrides:
+            return
+
+        check = self.constraint_check(self.conditions)
+        if check:
+            if self.transition_delay >= 0:
+                self.light_transition(kwargs)
+            else:
+                if self.turn_off_mode:
+                    self.light_off(kwargs)
+
+    def light_on(self, kwargs):
+        for on_entity in self.lights:
+            # self.turn_on(on_entity)
+            device, _ = self.split_entity(on_entity)
+            if device == "scene":
+                self.log("I activated {}".format(on_entity))
+                self.turn_on(on_entity)
+            else:
+                self.log("Turned {} on".format(on_entity))
+                if device == "switch":
+                    self.turn_on(on_entity)
+                else:
+                    self.turn_on(on_entity, **self.service_data)
+
+    def light_transition(self, kwargs):
+        for on_entity in self.lights:
+            device, _ = self.split_entity(on_entity)
+            if device == "light":
+                if self.get_state(on_entity) == 'on':
+                    self.turn_on(on_entity, brightness=self.transition_dim)
+
+        if self.turn_off_mode:
+            dim_in_sec = int(self.delay) - int(self.transition_dim)
+            self.handle = self.run_in(
+                self.light_off, dim_in_sec)
+
+    def light_off(self, kwargs):
+        for on_entity in self.lights:
+            device, _ = self.split_entity(on_entity)
+            if device == "scene":
+                self.log("I activated {}".format(on_entity))
+                self.turn_on(on_entity)
+            else:
+                self.log("Turned {} off".format(on_entity))
+                self.turn_off(on_entity)
+
+    def light_override(self, entity, attribute, old, new, kwargs):
+        self.log(f"Turned {entity} {new}")
+        if new == "on" and self.light_override_force_off:
+            self.light_off(None)
+
+    def check_light_overrides(self):
+        value = False
+        if self.light_overrides is not None:
+            condition_states = ['on', 'Home', 'home', 'True', 'true']
+            for entity in self.light_overrides:
+                if len(entity.split(',')) > 1:
+                    if entity.split(',')[1].strip() != self.get_state(entity.split(',')[0].strip()):
+                        value = True
+                elif self.get_state(entity) not in condition_states:
+                    value = True
+        return not value
+
+    def check_time_out_lights(self):
+        if self.time_control:
+            for on_entity in self.lights:
+                device, _ = self.split_entity(on_entity)
+                if device == "light":
+                    states = self.get_state(on_entity, attribute='all')
+                    state = states['state']
+                    last_changed = states['last_changed']
+                    if state == 'on':
+                        # lets check lighting
+                        time_off = datetime.datetime.now().timestamp(
+                        ) - self.convert_utc(last_changed).timestamp()
+                        if time_off > float(self.delay):
+                            self.log('WatchDog: lighting time out.')
+                            self.light_off()
+
+    # Check conditions and constraints
+    def constraint_check(self, conditionlist: list) -> bool:
+        for conditions in conditionlist:
+            if not eval(conditions):
+                return False
+        return True
+
+    def check_time(self, on_time, off_time):
+        return False if (on_time is None and off_time is None) else (on_time == off_time == "00:00:00") or self.now_is_between(on_time, off_time)
+
+    def watch_dog(self, kwargs: dict[str, Any]):
+        # check device without motions
+        self.check_time_out_lights()
+
+    def start_profile(self, kwargs: dict[str, Any]):
+        profile_name = kwargs.get("profile")
+        profile = self.args["profiles"][profile_name]
+        self.log(f"start_profile {profile_name}: {profile}")
+
+        self.profile = profile_name
+        self.delay = int(profile.get('delay', 60))
+        self.ambient_lux = int(profile.get(
+            'ambient_lux', self.default_ambient_lux))
+
+        self.on_time = str(profile.get('start_time', '00:00:00'))
+        self.off_time = str(profile.get('end_time', '00:00:00'))
+        self.turn_off_mode = profile.get('turn_off_mode', True)
+        self.service_data = profile.get('light_data', None)
+        transition = profile.get('transition', {})
+        self.transition_delay = int(transition.get('delay', 0))
+        self.transition_dim = int(transition.get('dim', 10))
+
+    def end_profile(self, kwargs: dict[str, Any]):
+        profile_name = kwargs.get("profile")
+        self.log(f"end_profile {profile_name}")
+
+        # cleanup
+        self.profile = None
+        self.on_time = None
+        self.off_time = None
+
+        # Turn off the lights when you leave!
+        if not self.check_time(self.on_time, self.off_time):
+            self.cancel()
+            self.light_off(None)
+
+    def cancel(self):
+        if self.handle:
+            if self.timer_running(self.handle):
+                self.cancel_timer(self.handle)
+            self.handle = None
