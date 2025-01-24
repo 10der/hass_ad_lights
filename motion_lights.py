@@ -10,8 +10,6 @@ import global_module
 # pylint: disable=too-many-arguments
 import hassapi as hass  # type: ignore
 
-# SUPERVISOR = "a855815cb80b4592beb9bdb1a28597c6"
-
 DEFAULT_NAME = "profile"
 
 
@@ -46,16 +44,25 @@ class MotionLights(hass.Hass):
         if self.lights is not None:
             for light in self.lights:
                 self.listen_state(
-                    self.light_off_cancel_timer_handler,
-                    entity_id=light)  # attribute="context"
+                    self.light_updatecontext,
+                        entity_id=light)
                 self.listen_state(
-                    self.light_off_cancel_timer_handler, attribute="brightness")
+                    self.light_off_cancel_timer_handler,
+                    entity_id=light)
+                # self.listen_state(
+                #     self.light_off_cancel_timer_handler,
+                #     attribute="brightness",
+                #     entity_id=light)
         else:
             self.log("No lights specified, doing nothing")
             return
 
         if isinstance(self.sensors, str):
             self.sensors = self.sensors.split(",")
+
+        self.watch_dog_handler(dict(initial=True))
+        in_one_minute = datetime.datetime.now() + timedelta(minutes=1)
+        self.run_every(self.watch_dog_handler, in_one_minute, 1 * 60)
 
         for sensor in self.sensors:
             self.listen_state(self.motion_handler, sensor)
@@ -67,10 +74,6 @@ class MotionLights(hass.Hass):
             if len(sensor.split(",")) > 1:
                 sensor = sensor.split(",")[0].strip()
             self.listen_state(self.light_override_handler, sensor)
-
-        self.watch_dog_handler(dict(initial=True))
-        in_one_minute = datetime.datetime.now() + timedelta(minutes=1)
-        self.run_every(self.watch_dog_handler, in_one_minute, 1 * 60)
 
         self.log("Motion lights started...")
 
@@ -99,9 +102,7 @@ class MotionLights(hass.Hass):
             return
 
         if not self.check_time(self.on_time, self.off_time):
-            self.log(
-                f"Time not meet. Motion: {on}",
-            )
+            self.log(f"Time not meet {on} - [{self.on_time}..{self.off_time}]")
             return
 
         if on:
@@ -113,7 +114,7 @@ class MotionLights(hass.Hass):
             self.log("Action detected ON.")
             self.cancel()
             self.do_light_on(self.service_data)
-        elif not on:
+        else:
             self.log("Action detected OFF.")
             self.cancel()
             sensor_on = False
@@ -124,18 +125,45 @@ class MotionLights(hass.Hass):
                 self.log("Countdown for lighting OFF")
                 self.handle = self.run_in(self.do_light_off, self.delay)
 
-    def light_off_cancel_timer_handler(self, entity, attribute, old, new, kwargs):  # pylint: disable=unused-argument
-        """Handle light to turn off."""
+    def light_updatecontext(self, entity, attribute, old, new, kwargs):  # pylint: disable=unused-argument
+        """Handle light context."""
 
-        user_id = self.get_state(entity, attribute="context")["user_id"]
-        if user_id != global_module.SUPERVISOR:
+        # Action	    id	        parent_id	user_id
+        # Physical	    Not Null	Null	        Null
+        # Automation	    Not Null	Not Null	Null
+        # UI	            Not Null	Null	        Not Null
+
+        context = self.get_state(entity, attribute="context")
+        if context is not None:
+            user_id = context.get("user_id")
+            context_id = context.get("id")
+            parent_id = context.get("parent_id")
             self.log(
-                f"User: '{user_id}' change device from UI"
-                f"to '{new}' from '{old}'",
+                f"Light action: to '{new}' from '{old}' "
+                f"user_id: '{user_id}' "
+                f"context_id '{context_id}' "
+                f"parent_id '{parent_id}'",
                 level="INFO"
             )
-            if new == "on":
+
+            if context_id is not None and parent_id is None and user_id is not None:
+                if user_id != global_module.SUPERVISOR:
+                    self.log(
+                        f"User: '{user_id}' change device from UI "
+                        f"to '{new}' from '{old}'",
+                        level="INFO"
+                    )
+                    self.handle_user = True
+            elif context_id is not None and parent_id is None and user_id is None:
+                self.log(
+                    f"User: manually physical change device "
+                    f"to '{new}' from '{old}'",
+                    level="INFO"
+                )
                 self.handle_user = True
+
+    def light_off_cancel_timer_handler(self, entity, attribute, old, new, kwargs):  # pylint: disable=unused-argument
+        """Handle light to turn off."""
 
         if attribute != "state":
             return
@@ -162,7 +190,8 @@ class MotionLights(hass.Hass):
         if not self.ambient_lux_control:
             return
 
-        # self.log(f"ambient_handler {new} => {self.ambient_lux} {self.ambient_lux_off}")
+        self.log(
+            f"ambient_handler {new} => {self.ambient_lux} {self.ambient_lux_off}")
 
         if self.check_time(self.on_time, self.off_time):
             if self.is_motion(self.sensors):
@@ -170,19 +199,23 @@ class MotionLights(hass.Hass):
                 is_dark = self.is_dark(is_light)
                 if is_dark and not is_light:
                     # if dark and not lighting
-                    self.log("Ambient sensor: To dark")
+                    self.log("Ambient sensor: Too dark")
                     self.do_action(True)
                 elif not is_dark and is_light:
                     # if not dark and lighting
                     self.log("Ambient sensor: Too much lux")
-                    self.do_action(False)
+                    self.light_off(None)
 
     # mode = True if lighting is on now otherwise False
     def is_dark(self, mode=None):
         """Check lux."""
 
         if self.ambient_sensor is not None:
-            value = int(self.get_state(self.ambient_sensor))
+            state = self.get_state(self.ambient_sensor)
+            if state is None:
+                self.log(f"Unknown state for entity: {self.ambient_sensor}")
+                state = 0
+            value = int(state)
             if value > self.ambient_lux:
                 # Too much LUX
                 if mode:
@@ -305,6 +338,9 @@ class MotionLights(hass.Hass):
         motion_on = False
         for motion in motions:
             states = self.get_state(motion, attribute="all")
+            if states is None:
+                self.log(f"WatchDog: Unknown state for entity {motion}")
+                states["state"] = False
             state = states["state"]
             if state == "on":
                 motion_on = True
@@ -335,6 +371,10 @@ class MotionLights(hass.Hass):
             device, _ = self.split_entity(on_entity)
             if device == "light":
                 states = self.get_state(on_entity, attribute="all")
+                if states is None:
+                    self.log(f"WatchDog: Unknown state for entity {on_entity}")
+                    states["state"] = False
+
                 state = states["state"]
                 last_changed = states["last_changed"]
                 if state == "on":
@@ -376,6 +416,7 @@ class MotionLights(hass.Hass):
         if not found:
             # No active profile - cleanup
             if self.profile_name is not None:
+                self.log(f"Clear active profile: {profile_name}")
                 self.clear_profile()
 
                 # turn all off
@@ -389,10 +430,10 @@ class MotionLights(hass.Hass):
 
             # constraint is active
             if not self.constraint_check(self.conditions):
-                if self.is_idle():
-                    if self.is_light(self.lights):
-                        self.log("WatchDog: Constraints is active.")
-                        self.light_off(None)
+                # if self.is_idle():
+                if self.is_light(self.lights):
+                    self.log("WatchDog: Constraints is active.")
+                    self.light_off(None)
 
             if self.check_light_overrides(self.light_overrides):
                 return
