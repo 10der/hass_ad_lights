@@ -37,8 +37,8 @@ class Profile:
                 True if obj.get("turn_off_mode") is None else obj.get("turn_off_mode")
             )
 
-            self._lux = obj.get("lux") or 5
-            self._delay = obj.get("delay") or 60
+            self._lux = obj.get("lux", 5)
+            self._delay = obj.get("delay", 60)
             self._light_data = obj.get("light_data") or {"brightness": 254}
 
             if obj.get("transition"):
@@ -120,7 +120,6 @@ class State(Enum):
     IDLE = 0
     DETECTED = 1
     COWNTDOWN = 2
-    RESTRICTED = 255
 
     def __str__(self):
         return str(self.value)
@@ -172,10 +171,10 @@ class MotionLights(hass.Hass):
         self.current_state = State.IDLE
         self.update_all(None, None, None, None, {"action": Action.INIT})
 
-        self.on_idle(None)
         self.run_every(
-            self.on_idle, datetime.datetime.now() + timedelta(minutes=1), 1 * 60
+            self.on_idle, "now", 1 * 60
         )
+
         self.log("Application started...")
 
     # properties
@@ -187,6 +186,15 @@ class MotionLights(hass.Hass):
     @current_state.setter
     def current_state(self, value):
         self.set_state(self.state_name, state=value.name)
+
+    @property
+    def restriction(self):
+        """restriction propery"""
+        return self.get_state(self.state_name, attribute="restriction", default=False)
+
+    @restriction.setter
+    def restriction(self, value):
+        self.set_state(self.state_name, attributes={"restriction": value})
 
     @property
     def motion(self):
@@ -269,51 +277,56 @@ class MotionLights(hass.Hass):
         self.update_overrides()
         self.update_lighting()
 
-        handle_user = False
+        data = {"handle_user": False}
         if kwargs["action"] == Action.LIGHTING:
-            handle_user = self.is_light_handle_by_user(
+            data["handle_user"] = self.is_light_handle_by_user(
                 entity, attribute, old, new, kwargs
             )
 
-        self.update(kwargs["action"], handle_user)
+        self.update(kwargs["action"], new, data)
 
-    def update(self, action: str, handle_user: bool = False):
+    def update(self, action: str, value=None, kwargs: dict[str, Any] = None):
         """on update action"""
         new_state = self.current_state
 
+        if action not in [Action.ILLUMINANCE]:
+            self.log(f"{action} => {value}")
+
         if action == Action.INIT:
-            self.log(f"{action}")
+            new_state = State.IDLE
 
         elif action == Action.OVERRIDE:
-            self.log(f"{action}")
             self.on_override()
 
         elif action == Action.LIGHTING:
+            handle_user = kwargs.get("handle_user") if kwargs else False
             if self.lighting and handle_user:
                 self.log(f"MANUALLY {action} -> {self.lighting}")
 
             if not self.lighting:
                 new_state = State.IDLE
-                self.log(f"{action} -> {self.lighting}")
 
         elif action == Action.ILLUMINANCE:
             # self.log(f"{action} -> {self.illuminance}")
-            if self.motion:
-                if not self.lighting:
-                    self.motion_action(True)
+            if not self.check_restriction:
+                if self.motion:
+                    if not self.lighting:
+                        self.motion_action(True)
 
         elif action == Action.TIMEOUT:
-            self.log(f"{action}")
             new_state = State.IDLE
 
         elif action == Action.MOTION:
-            self.log(f"{action} -> {self.motion}")
-            result = self.motion_action(self.motion)
-            # if result is not False => restriction occurred!
-            if result:
-                new_state = State.IDLE  # State.RESTRICTED
+            self.restriction = self.check_restriction()
+            if self.motion:
+                if self.restriction:
+                    new_state = State.IDLE
+                else:
+                    new_state = State.DETECTED
+                    self.motion_action(True)
             else:
-                new_state = State.DETECTED if self.motion else State.COWNTDOWN
+                new_state = State.COWNTDOWN
+                self.motion_action(False)
 
         if self.current_state != new_state:
             self.log(f"{self.current_state.name} -> {new_state.name}")
@@ -356,10 +369,31 @@ class MotionLights(hass.Hass):
                 self.log("WatchDog: Lights overridden.")
                 self.light_off(dict(mandatory=True))
         else:
-            self.motion_action(self.motion)
+            if not self.check_restriction:
+                if self.motion:
+                    if not self.lighting:
+                        self.motion_action(True)
 
     def motion_action(self, motion_detected):
         """Do on motion action is ON/OFF"""
+        if motion_detected:
+            # do lighting....
+            if not self.time_control:
+                self.cancel()
+                self.run_in(self.light_on, 0)
+        else:
+            # start downcount timer for lighting off
+            if self.lighting:
+                delay = self.profile.delay
+                method = self.light_off
+                if self.profile.transition_delay > 0:
+                    delay = delay - self.profile.transition_delay
+                    method = self.light_dim
+                self.cancel()
+                self.handle = self.run_in(method, delay)
+
+    def check_restriction(self):
+        """check restrictions"""
 
         # is profile active?
         if not self.profile.active:
@@ -378,36 +412,17 @@ class MotionLights(hass.Hass):
             )
             return "TIME"
 
-        if motion_detected:
-            # light override?
-            if self.override:
-                self.log("Lights overridden.")
-                return "OVERRIDE"
+        # light override?
+        if self.override:
+            self.log("Lights overridden.")
+            return "OVERRIDE"
 
-            # lux control
-            if self.illuminance > self.profile.lux:
-                # only if not light right now
-                if not self.lighting:
-                    self.log(f"lux: {self.illuminance}/{self.profile.lux}")
-                    return "LUX"
-                else:
-                    # if already light
-                    delta = self.illuminance - self.profile.lux
-                    self.log(f"lux light ON control delta: {delta}")
+        # lux control
+        if self.illuminance > self.profile.lux:
+            self.log(f"lux: {self.illuminance}/{self.profile.lux}")
+            return "LUX"
 
-            # do lighting....
-            if not self.time_control:
-                self.cancel()
-                self.run_in(self.light_on, 0)
-        else:
-            # start downcount timer for lighting off
-            delay = self.profile.delay
-            method = self.light_off
-            if self.profile.transition_delay > 0:
-                delay = delay - self.profile.transition_delay
-                method = self.light_dim
-            self.cancel()
-            self.handle = self.run_in(method, delay)
+        return False
 
     def light_on(self, kwargs):
         """Do light on"""
@@ -430,8 +445,10 @@ class MotionLights(hass.Hass):
             if device == "switch":
                 pass
             else:
-                data = self.profile.transition_data
-                self.turn_on(dim_entity, **data)
+                state = self.get_state(dim_entity)
+                if state == "on":
+                    data = self.profile.transition_data
+                    self.turn_on(dim_entity, **data)
 
         self.handle = self.run_in(self.light_off, self.profile.transition_delay)
 
@@ -455,6 +472,10 @@ class MotionLights(hass.Hass):
         """On idle"""
         self.set_profile(self.args["profiles"] if "profiles" in self.args else None)
 
+        # update restriction property
+        self.restriction = self.check_restriction()
+
+        #if constraint => turn off
         check = self.constraint_check(self.conditions)
         if not check:
             if self.lighting:
