@@ -7,7 +7,6 @@
 from enum import Enum
 from typing import Any
 import datetime
-from datetime import timedelta
 import global_module
 import hassapi as hass  # type: ignore
 
@@ -171,9 +170,7 @@ class MotionLights(hass.Hass):
         self.current_state = State.IDLE
         self.update_all(None, None, None, None, {"action": Action.INIT})
 
-        self.run_every(
-            self.on_idle, "now", 1 * 60
-        )
+        self.run_every(self.on_idle, "now", 1 * 60)
 
         self.log("Application started...")
 
@@ -334,6 +331,7 @@ class MotionLights(hass.Hass):
 
     def set_profile(self, profiles):
         """Set active profile"""
+        profile_changed = False
         if profiles is None:
             self.profile = Profile(None)
             self.profile.activate = True
@@ -352,12 +350,16 @@ class MotionLights(hass.Hass):
                         self.profile = Profile(profile)
                         self.profile.active = True
                         self.log(f"Set active profile: {profile_name}")
+                        profile_changed = True
                         break
 
             if not found:
                 if self.profile.active:
                     self.profile.active = False
                     self.log(f"Profile {self.profile.name} deactivated.")
+                    profile_changed = True
+
+        return profile_changed
 
     def on_override(self):
         """On override"""
@@ -470,12 +472,16 @@ class MotionLights(hass.Hass):
 
     def on_idle(self, kwargs: dict[str, Any]):
         """On idle"""
-        self.set_profile(self.args["profiles"] if "profiles" in self.args else None)
+        profile_changed = self.set_profile(
+            self.args["profiles"] if "profiles" in self.args else None
+        )
+        if profile_changed:
+            self.on_profile_changed()
 
         # update restriction property
         self.restriction = self.check_restriction()
 
-        #if constraint => turn off
+        # if constraint => turn off
         check = self.constraint_check(self.conditions)
         if not check:
             if self.lighting:
@@ -493,6 +499,20 @@ class MotionLights(hass.Hass):
                         ):
                             self.log("WatchDog: Light off by timeout")
                             self.light_off(None)
+
+    def on_profile_changed(self):
+        """On profile changed"""
+        if not self.profile.active:
+            self.log("Profile deactivated: Turn off lights.")
+            self.light_off(dict(mandatory=True))
+
+        if self.lighting:
+            if self.profile.turn_off_mode:
+                self.log("New profile: Turn off lights.")
+                self.light_off(dict(mandatory=True))
+            else:
+                self.log("New profile: Fix dim lights.")
+                self.light_dim(None)
 
     def check_time(self, on_time, off_time):
         """Check is time for action."""
