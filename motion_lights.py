@@ -33,7 +33,8 @@ class Profile:
             self._start_time = obj.get("start_time") or "00:00:00"
             self._end_time = obj.get("end_time") or "00:00:00"
             self._turn_off_mode = (
-                True if obj.get("turn_off_mode") is None else obj.get("turn_off_mode")
+                True if obj.get("turn_off_mode") is None else obj.get(
+                    "turn_off_mode")
             )
 
             self._lux = obj.get("lux", 5)
@@ -126,14 +127,14 @@ class State(Enum):
     @staticmethod
     def from_str(text):
         """Convert str to enum"""
-        statuses = [status for status in dir(State) if not status.startswith("_")]
+        statuses = [status for status in dir(
+            State) if not status.startswith("_")]
         if text in statuses:
             return getattr(State, text)
         return None
 
 
 DEFAULT_WATCHDOG_TIMEOUT = 60 * 5
-
 
 class MotionLights(hass.Hass):
     """Motion lights class."""
@@ -142,6 +143,13 @@ class MotionLights(hass.Hass):
         """AD initialize."""
 
         self.depends_on_module([global_module])
+
+        self.set_log_level("INFO") #INFO, WARNING, ERROR, CRITICAL, DEBUG, NOTSET.
+
+        # { "app_class": "MotionLights" }
+        self.listen_event(
+            self._handle_log_debug, event='APPDAEMON_SET_DEBUG'
+        )
 
         # internal sensor for states
         self.state_name = f"sensor.{self.name.lower().replace(' ', '_')}"
@@ -172,7 +180,14 @@ class MotionLights(hass.Hass):
 
         self.run_every(self.on_idle, "now", 1 * 60)
 
-        self.log("Application started...")
+        self.log("Application started...", level="INFO")
+
+    def _handle_log_debug(self, event_name, data, _):
+        """Handle debug log."""
+
+        if data.get('app_class', 'unknown') == self.__class__.__name__:
+            self.set_log_level("DEBUG")
+            self.log("Debug log enabled", level="INFO")
 
     # properties
     @property
@@ -286,8 +301,10 @@ class MotionLights(hass.Hass):
         """on update action"""
         new_state = self.current_state
 
-        if action not in [Action.ILLUMINANCE]:
-            self.log(f"{action} => {value}")
+        if action in [Action.ILLUMINANCE]:
+            self.log(f"{action}({value})", level="DEBUG")
+        else:
+            self.log(f"{action}({value})", level="INFO")
 
         if action == Action.INIT:
             new_state = State.IDLE
@@ -304,7 +321,6 @@ class MotionLights(hass.Hass):
                 new_state = State.IDLE
 
         elif action == Action.ILLUMINANCE:
-            # self.log(f"{action} -> {self.illuminance}")
             if not self.check_restriction:
                 if self.motion:
                     if not self.lighting:
@@ -349,14 +365,16 @@ class MotionLights(hass.Hass):
                             profile["lux"] = self.default_lux
                         self.profile = Profile(profile)
                         self.profile.active = True
-                        self.log(f"Set active profile: {profile_name}")
+                        self.log(
+                            f"Set active profile: {profile_name}", level="INFO")
                         profile_changed = True
                         break
 
             if not found:
                 if self.profile.active:
                     self.profile.active = False
-                    self.log(f"Profile {self.profile.name} deactivated.")
+                    self.log(
+                        f"Profile {self.profile.name} deactivated.", level="INFO")
                     profile_changed = True
 
         return profile_changed
@@ -404,24 +422,25 @@ class MotionLights(hass.Hass):
         # check constraint
         check = self.constraint_check(self.conditions)
         if not check:
-            self.log("Constraints is active")
+            self.log("Constraints is active", level="DEBUG")
             return "CONSTRAINT"
 
         # is it time to light?
         if not self.check_time(self.profile.start_time, self.profile.end_time):
             self.log(
-                f"Time not meet - [{self.profile.start_time}..{self.profile.end_time}]"
-            )
+                f"Time not meet - [{self.profile.start_time}..{self.profile.end_time}]",
+                level="DEBUG")
             return "TIME"
 
         # light override?
         if self.override:
-            self.log("Lights overridden.")
+            self.log("Lights overridden.", level="DEBUG")
             return "OVERRIDE"
 
         # lux control
         if self.illuminance > self.profile.lux:
-            self.log(f"lux: {self.illuminance}/{self.profile.lux}")
+            self.log(
+                f"lux: {self.illuminance}/{self.profile.lux}", level="DEBUG")
             return "LUX"
 
         return False
@@ -429,7 +448,8 @@ class MotionLights(hass.Hass):
     def light_on(self, kwargs):
         """Do light on"""
         for on_entity in self.on_entities:
-            self.log(f"Turned {on_entity} on")
+            self.log(
+                f"Turned {on_entity} on by profile {self.profile.name}", level="INFO")
             device, _ = self.split_entity(on_entity)
             if device == "switch":
                 self.turn_on(on_entity)
@@ -442,7 +462,8 @@ class MotionLights(hass.Hass):
     def light_dim(self, kwargs):
         """Do Light dim"""
         for dim_entity in self.on_entities:
-            self.log(f"Dim {dim_entity}")
+            self.log(
+                f"Dim {dim_entity} by profile {self.profile.name}", level="INFO")
             device, _ = self.split_entity(dim_entity)
             if device == "switch":
                 pass
@@ -452,7 +473,8 @@ class MotionLights(hass.Hass):
                     data = self.profile.transition_data
                     self.turn_on(dim_entity, **data)
 
-        self.handle = self.run_in(self.light_off, self.profile.transition_delay)
+        self.handle = self.run_in(
+            self.light_off, self.profile.transition_delay)
 
     def light_off(self, kwargs):
         """Do light off"""
@@ -467,7 +489,7 @@ class MotionLights(hass.Hass):
         for off_entity in self.on_entities:
             state = self.get_state(off_entity)
             if state == "on":
-                self.log(f"Turned {off_entity} off")
+                self.log(f"Turned {off_entity} off", level="INFO")
                 self.turn_off(off_entity)
 
     def on_idle(self, kwargs: dict[str, Any]):
@@ -485,7 +507,7 @@ class MotionLights(hass.Hass):
         check = self.constraint_check(self.conditions)
         if not check:
             if self.lighting:
-                self.log("WatchDog: Constraints is active")
+                self.log("WatchDog: Constraints is active", level="INFO")
                 self.light_off(dict(mandatory=True))
 
         # check lost devices...
@@ -497,21 +519,22 @@ class MotionLights(hass.Hass):
                         if self.is_lights_timeout(
                             0 if self.time_control else DEFAULT_WATCHDOG_TIMEOUT
                         ):
-                            self.log("WatchDog: Light off by timeout")
+                            self.log(
+                                "WatchDog: Light off by timeout", level="INFO")
                             self.light_off(None)
 
     def on_profile_changed(self):
         """On profile changed"""
         if not self.profile.active:
-            self.log("Profile deactivated: Turn off lights.")
+            self.log("Profile deactivated: Turn off lights.", level="INFO")
             self.light_off(dict(mandatory=True))
 
         if self.lighting:
             if self.profile.turn_off_mode:
-                self.log("New profile: Turn off lights.")
+                self.log("New profile: Turn off lights.", level="INFO")
                 self.light_off(dict(mandatory=True))
             else:
-                self.log("New profile: Fix dim lights.")
+                self.log("New profile: Fix dim lights.", level="INFO")
                 self.light_dim(None)
 
     def check_time(self, on_time, off_time):
@@ -539,7 +562,6 @@ class MotionLights(hass.Hass):
         for motion in self.sensors:
             states = self.get_state(motion, attribute="all")
             if states is None:
-                self.log(f"WatchDog: Unknown state for entity {motion}")
                 states["state"] = False
             state = states["state"]
             if state == "on":
@@ -595,7 +617,8 @@ class MotionLights(hass.Hass):
         """ "Fill list values"""
         entities = self.args.get(name)
         if entities is None:
-            self.log(f"No sensor(s) {name} specified, doing nothing")
+            self.log(
+                f"No sensor(s) {name} specified, doing nothing", level="INFO")
             return []
 
         if isinstance(entities, str):
@@ -619,13 +642,13 @@ class MotionLights(hass.Hass):
             user_id = context.get("user_id")
             context_id = context.get("id")
             parent_id = context.get("parent_id")
-            # self.log(
-            #     f"Light action: to '{new}' from '{old}' "
-            #     f"user_id: '{user_id}' "
-            #     f"context_id '{context_id}' "
-            #     f"parent_id '{parent_id}'",
-            #     level="INFO"
-            # )
+            self.log(
+                f"Light action: to '{new}' from '{old}' "
+                f"user_id: '{user_id}' "
+                f"context_id '{context_id}' "
+                f"parent_id '{parent_id}'",
+                level="DEBUG"
+            )
 
             if context_id is not None and parent_id is None and user_id is not None:
                 if user_id != global_module.SUPERVISOR:
