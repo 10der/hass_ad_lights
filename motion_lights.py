@@ -144,8 +144,6 @@ class MotionLights(hass.Hass):
 
         self.depends_on_module([global_module])
 
-        self.set_log_level("INFO") #INFO, WARNING, ERROR, CRITICAL, DEBUG, NOTSET.
-
         # { "app_class": "MotionLights" }
         self.listen_event(
             self._handle_log_debug, event='APPDAEMON_SET_DEBUG'
