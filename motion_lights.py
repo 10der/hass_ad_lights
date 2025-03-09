@@ -119,7 +119,7 @@ class State(Enum):
 
     IDLE = 0
     DETECTED = 1
-    COWNTDOWN = 2
+    COUNTDOWN = 2
 
     def __str__(self):
         return str(self.value)
@@ -135,6 +135,7 @@ class State(Enum):
 
 
 DEFAULT_WATCHDOG_TIMEOUT = 60 * 5
+
 
 class MotionLights(hass.Hass):
     """Motion lights class."""
@@ -249,7 +250,8 @@ class MotionLights(hass.Hass):
         for entity in self.ambient_light_sensors:
             state = self.get_state(entity)
             if state is not None:
-                collected.append(float(state))
+                if isinstance(state, (int, float)):
+                    collected.append(float(state))
 
         self.illuminance = min(collected, default=0)
 
@@ -282,6 +284,10 @@ class MotionLights(hass.Hass):
 
     def update_all(self, entity, attribute, old, new, kwargs):
         """update all states"""
+
+        # if old in ['unknown', 'unavailable']:
+        #    return
+
         self.update_illuminance()
         self.update_motion()
         self.update_overrides()
@@ -299,10 +305,22 @@ class MotionLights(hass.Hass):
         """on update action"""
         new_state = self.current_state
 
-        if action in [Action.ILLUMINANCE]:
-            self.log(f"{action}({value})", level="DEBUG")
+        if action == Action.INIT:
+            self.log("INIT", level="INFO")
+        elif action == Action.MOTION:
+            self.log(f"MOTION({self.motion})", level="INFO")
+        elif action == Action.LIGHTING:
+            self.log(f"LIGHTING({self.lighting})", level="INFO")
+        elif action == Action.ILLUMINANCE:
+            self.log(f"ILLUMINANCE({self.illuminance})", level="DEBUG")
+        elif action == Action.OVERRIDE:
+            self.log(f"OVERRIDE({self.override})", level="INFO")
+        elif action == Action.TIMEOUT:
+            self.log("TIMEOUT", level="INFO")
         else:
-            self.log(f"{action}({value})", level="INFO")
+            self.log(f"UNKNOWN({value})", level="INFO")
+
+        self.restriction = self.check_restriction()
 
         if action == Action.INIT:
             new_state = State.IDLE
@@ -319,7 +337,7 @@ class MotionLights(hass.Hass):
                 new_state = State.IDLE
 
         elif action == Action.ILLUMINANCE:
-            if not self.check_restriction:
+            if not self.restriction:
                 if self.motion:
                     if not self.lighting:
                         self.motion_action(True)
@@ -328,15 +346,15 @@ class MotionLights(hass.Hass):
             new_state = State.IDLE
 
         elif action == Action.MOTION:
-            self.restriction = self.check_restriction()
             if self.motion:
                 if self.restriction:
+                    self.log("LIGHT RESTRICTION", level="INFO")
                     new_state = State.IDLE
                 else:
                     new_state = State.DETECTED
                     self.motion_action(True)
             else:
-                new_state = State.COWNTDOWN
+                new_state = State.COUNTDOWN
                 self.motion_action(False)
 
         if self.current_state != new_state:
@@ -387,7 +405,7 @@ class MotionLights(hass.Hass):
                 self.log("WatchDog: Lights overridden.")
                 self.light_off(dict(mandatory=True))
         else:
-            if not self.check_restriction:
+            if not self.restriction:
                 if self.motion:
                     if not self.lighting:
                         self.motion_action(True)
@@ -409,6 +427,8 @@ class MotionLights(hass.Hass):
                     method = self.light_dim
                 self.cancel()
                 self.handle = self.run_in(method, delay)
+            else:
+                self.update(Action.TIMEOUT)
 
     def check_restriction(self):
         """check restrictions"""
@@ -513,7 +533,7 @@ class MotionLights(hass.Hass):
             motion, time_out = self.is_motion_timeout(DEFAULT_WATCHDOG_TIMEOUT)
             if not motion and time_out:
                 if self.lighting:
-                    if not self.profile.turn_off_mode:
+                    if self.profile.turn_off_mode:
                         if self.is_lights_timeout(
                             0 if self.time_control else DEFAULT_WATCHDOG_TIMEOUT
                         ):
@@ -526,6 +546,9 @@ class MotionLights(hass.Hass):
         if not self.profile.active:
             self.log("Profile deactivated: Turn off lights.", level="INFO")
             self.light_off(dict(mandatory=True))
+
+        if self.motion:
+            return
 
         if self.lighting:
             if self.profile.turn_off_mode:
